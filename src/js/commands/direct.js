@@ -28,41 +28,74 @@ var parser = new argparse.ArgumentParser({
 });
 parser.addArgument(['--smemory'], { help: "Use shadow memory", action: 'storeTrue'});
 parser.addArgument(['--analysis'], { help: "absolute path to analysis file to run", action:'append'});
+parser.addArgument(['--initParam'], { help: "initialization parameter for analysis, specified as key:value", action:'append'});
 parser.addArgument(['script_and_args'], {
     help: "script to record and CLI arguments for that script",
     nargs: argparse.Const.REMAINDER
 });
 var args = parser.parseArgs();
-if (args.script_and_args.length === 0) {
-    console.error("must provide script to record");
-    process.exit(1);
-}
-// we shift here so we can use the rest of the array later when
-// hacking process.argv; see below
-var script = args.script_and_args.shift();
 
-global.JALANGI_MODE="inbrowser";
-global.USE_SMEMORY=args.smemory;
+function runAnalysis(initParam) {
+    if (args.script_and_args.length === 0) {
+        console.error("must provide script to execute");
+        process.exit(1);
+    }
+    // we shift here so we can use the rest of the array later when
+    // hacking process.argv; see below
+    var script = args.script_and_args.shift();
 
-var path = require('path');
-var Headers = require('./../Headers');
-Headers.headerSources.forEach(function(src){
-    require('./../../../'+src);
-});
+    global.JALANGI_MODE="inbrowser";
+    global.USE_SMEMORY=args.smemory;
 
-if (args.analysis) {
-    args.analysis.forEach(function (src) {
-        require(path.resolve(src));
+    var path = require('path');
+    var Headers = require('./../Headers');
+    Headers.headerSources.forEach(function(src){
+        require('./../../../'+src);
     });
+
+    if (args.analysis) {
+        args.analysis.forEach(function (src) {
+            require(path.resolve(src));
+        });
+    }
+
+    if (J$.analysis && J$.analysis.init) {
+        J$.analysis.init(initParam ? initParam : {});
+    }
+
+    // hack process.argv for the child script
+    script = path.resolve(script);
+    var newArgs = [process.argv[0], script];
+    newArgs = newArgs.concat(args.script_and_args);
+    process.argv = newArgs;
+    try {
+        require(script);
+    } finally {
+        var result = J$.endExecution();
+        if (process.send && args.analysis) {
+            // we assume send is synchronous
+            process.send({result:result});
+        }
+    }
+    process.exit();
 }
 
-
-// hack process.argv for the child script
-script = path.resolve(script);
-var newArgs = [process.argv[0], script];
-newArgs = newArgs.concat(args.script_and_args);
-process.argv = newArgs;
-require(script);
-
-J$.endExecution();
+if (process.send) {
+    process.on('message', function (m) {
+        runAnalysis(m.initParam);
+    });
+} else {
+    var initParam = null;
+    if (args.initParam) {
+        initParam = {};
+        args.initParam.forEach(function (keyVal) {
+            var split = keyVal.split(':');
+            if (split.length !== 2) {
+                throw new Error("invalid initParam " + keyVal);
+            }
+            initParam[split[0]] = split[1];
+        });
+    }
+    runAnalysis(initParam);
+}
 

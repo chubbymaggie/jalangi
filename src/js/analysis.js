@@ -294,8 +294,8 @@ window = {String:String, Array:Array, Error:Error, Number:Number, Date:Date, Boo
             }
 
             function callAsConstructor(Constructor, args) {
-                if (isNative(Constructor)) {
-//                if (true) {
+//                if (isNative(Constructor)) {
+                if (true) {
                     var ret = callAsNativeConstructor(Constructor, args);
                     return ret;
                 } else {
@@ -520,13 +520,13 @@ window = {String:String, Array:Array, Error:Error, Number:Number, Date:Date, Boo
             // Method call (e.g., e.f())
             function M(iid, base, offset, isConstructor) {
                 return function () {
-                    var f = G(iid+2, base, offset);
+                    var f = G(iid + 2, base, offset);
                     return invokeFun(iid, base, f, arguments, isConstructor, true);
                 };
             }
 
             // Function enter
-            function Fe(iid, val, dis /* this */,args) {
+            function Fe(iid, val, dis /* this */, args) {
                 argIndex = 0;
                 if (rrEngine) {
                     rrEngine.RR_Fe(iid, val, dis);
@@ -664,7 +664,7 @@ window = {String:String, Array:Array, Error:Error, Number:Number, Date:Date, Boo
             function T(iid, val, type, hasGetterSetter) {
                 if (sandbox.analysis && sandbox.analysis.literalPre) {
                     try {
-                        sandbox.analysis.literalPre(iid, val);
+                        sandbox.analysis.literalPre(iid, val, hasGetterSetter);
                     } catch (e) {
                         clientAnalysisException(e);
                     }
@@ -688,7 +688,7 @@ window = {String:String, Array:Array, Error:Error, Number:Number, Date:Date, Boo
                 // inform analysis, which may modify the literal
                 if (sandbox.analysis && sandbox.analysis.literal) {
                     try {
-                        val = sandbox.analysis.literal(iid, val);
+                        val = sandbox.analysis.literal(iid, val, hasGetterSetter);
                     } catch (e) {
                         clientAnalysisException(e);
                     }
@@ -719,7 +719,7 @@ window = {String:String, Array:Array, Error:Error, Number:Number, Date:Date, Boo
                         clientAnalysisException(e);
                     }
                 }
-                if (rrEngine && (name==='this' || isGlobal)) {
+                if (rrEngine && (name === 'this' || isGlobal)) {
                     val = rrEngine.RR_R(iid, name, val);
                 }
                 if (sandbox.analysis && sandbox.analysis.read) {
@@ -759,20 +759,21 @@ window = {String:String, Array:Array, Error:Error, Number:Number, Date:Date, Boo
             }
 
             // variable declaration (Init)
-            function N(iid, name, val, isArgumentSync) {
+            function N(iid, name, val, isArgumentSync, isLocalSync) {
+                // isLocalSync is only true when we sync variables inside a for-in loop
                 if (isArgumentSync) {
                     argIndex++;
                 }
                 if (rrEngine) {
                     val = rrEngine.RR_N(iid, name, val, isArgumentSync);
                 }
-                if (smemory) {
+                if (!isLocalSync && smemory) {
                     smemory.initialize(name);
                 }
-                if (sandbox.analysis && sandbox.analysis.declare) {
+                if (!isLocalSync && sandbox.analysis && sandbox.analysis.declare) {
                     try {
-                        if (isArgumentSync && argIndex>1) {
-                            sandbox.analysis.declare(iid, name, val, isArgumentSync, argIndex-2);
+                        if (isArgumentSync && argIndex > 1) {
+                            sandbox.analysis.declare(iid, name, val, isArgumentSync, argIndex - 2);
                         } else {
                             sandbox.analysis.declare(iid, name, val, isArgumentSync);
                         }
@@ -884,6 +885,12 @@ window = {String:String, Array:Array, Error:Error, Number:Number, Date:Date, Boo
                         break;
                     case "instanceof":
                         result_c = left_c instanceof right_c;
+                        if (rrEngine) {
+                            result_c = rrEngine.RR_L(iid, result_c, N_LOG_RETURN);
+                        }
+                        break;
+                    case "delete":
+                        result_c = delete left_c[right_c];
                         if (rrEngine) {
                             result_c = rrEngine.RR_L(iid, result_c, N_LOG_RETURN);
                         }

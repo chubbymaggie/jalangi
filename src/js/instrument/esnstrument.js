@@ -18,13 +18,19 @@
 
 /*jslint node: true browser: true */
 /*global astUtil acorn escodegen J$ */
+
+//var StatCollector = require('../utils/StatCollector');
+
+var acorn, escodegen, astUtil;
 (function (sandbox) {
     if (typeof acorn === 'undefined') {
         acorn = require("acorn");
         escodegen = require('escodegen');
         astUtil = require("./../utils/astUtil");
+        require("../Config");
     }
 
+    var Config = sandbox.Config;
     var FILESUFFIX1 = "_jalangi_";
     var COVERAGE_FILE_NAME = "jalangi_coverage.json";
     var SMAP_FILE_NAME = "jalangi_sourcemap.js";
@@ -173,19 +179,15 @@
         return text.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, "\\$&");
     }
 
-
-    function saveCode(code, metadata, isAppend, noInstrEval) {
+    function saveCode(code, isAppend, noInstrEval) {
         var fs = require('fs');
         var path = require('path');
-        var n_code = astUtil.JALANGI_VAR + ".noInstrEval = "+noInstrEval+";\n"+code + "\n";
+        var n_code = astUtil.JALANGI_VAR + ".noInstrEval = " + noInstrEval + ";\n" + code + "\n";
         if (isAppend) {
             fs.appendFileSync(instCodeFileName, n_code, "utf8");
         } else {
             fs.writeFileSync(instCodeFileName, n_code, "utf8");
 
-        }
-        if (metadata) {
-            fs.writeFileSync(instCodeFileName + ".ast.json", JSON.stringify(metadata, undefined, 2), "utf8");
         }
     }
 
@@ -213,7 +215,7 @@
     function loadInitialIID(outputDir, initIIDs) {
         var path = require('path');
         var fs = require('fs');
-        var iidf = path.join(outputDir?outputDir:process.cwd(), INITIAL_IID_FILE_NAME);
+        var iidf = path.join(outputDir ? outputDir : process.cwd(), INITIAL_IID_FILE_NAME);
 
         if (initIIDs) {
             hasInitializedIIDs = false;
@@ -221,12 +223,12 @@
         } else {
             try {
                 var line;
-                var iids = JSON.parse(line = fs.readFileSync(iidf,"utf8"));
+                var iids = JSON.parse(line = fs.readFileSync(iidf, "utf8"));
                 condCount = iids.condCount;
                 iid = iids.iid;
                 opIid = iids.opIid;
                 hasInitializedIIDs = true;
-            } catch(e) {
+            } catch (e) {
                 initializeIIDCounters(false);
             }
         }
@@ -237,7 +239,7 @@
         var path = require('path');
         var fs = require('fs');
         var line;
-        var iidf = path.join(outputDir?outputDir:process.cwd(), INITIAL_IID_FILE_NAME);
+        var iidf = path.join(outputDir ? outputDir : process.cwd(), INITIAL_IID_FILE_NAME);
         fs.writeFileSync(iidf, line = JSON.stringify({condCount:condCount, iid:iid, opIid:opIid}));
     }
 
@@ -294,13 +296,13 @@
             fh = fs.openSync(instCodeFileName, 'w');
         }
 
-        writeLineToIIDMap(fs, traceWfh, fh, "(function (sandbox) {\n if (!sandbox.iids) {sandbox.iids = []; sandbox.orig2Inst = {};}\n");
+        writeLineToIIDMap(fs, traceWfh, fh, "(function (sandbox) {\n if (!sandbox.iids) {sandbox.iids = []; sandbox.orig2Inst = {}; }\n");
         writeLineToIIDMap(fs, traceWfh, fh, "var iids = sandbox.iids; var orig2Inst = sandbox.orig2Inst;\n");
-        writeLineToIIDMap(fs, traceWfh, fh, "var fn = \""+curFileName+"\";\n");
+        writeLineToIIDMap(fs, traceWfh, fh, "var fn = \"" + curFileName + "\";\n");
         // write all the data
         Object.keys(iidSourceInfo).forEach(function (iid) {
             var sourceInfo = iidSourceInfo[iid];
-            writeLineToIIDMap(fs, traceWfh, fh, "iids[" + iid + "] = [fn," + sourceInfo[1] + "," + sourceInfo[2] + "];\n");
+            writeLineToIIDMap(fs, traceWfh, fh, "iids[" + iid + "] = [fn," + sourceInfo[1] + "," + sourceInfo[2] + "," + sourceInfo[3] + "," + sourceInfo[4] + "];\n");
         });
         Object.keys(orig2Inst).forEach(function (filename) {
             writeLineToIIDMap(fs, traceWfh, fh, "orig2Inst[\"" + filename + "\"] = \"" + orig2Inst[filename] + "\";\n");
@@ -313,6 +315,18 @@
         // also write output as JSON, to make consumption easier
         var jsonFile = smapFile.replace(/.js$/, '.json');
         var outputObj = [iidSourceInfo, orig2Inst];
+        if (!initIIDs && fs.existsSync(jsonFile)) {
+            var oldInfo = JSON.parse(fs.readFileSync(jsonFile));
+            var oldIIDInfo = oldInfo[0];
+            var oldOrig2Inst = oldInfo[1];
+            Object.keys(iidSourceInfo).forEach(function (iid) {
+                oldIIDInfo[iid] = iidSourceInfo[iid];
+            })
+            Object.keys(orig2Inst).forEach(function (filename) {
+                oldOrig2Inst[filename] = orig2Inst[filename];
+            });
+            outputObj = [oldIIDInfo, oldOrig2Inst];
+        }
         fs.writeFileSync(jsonFile, JSON.stringify(outputObj));
         fs.writeFileSync(path.join(outputDir, COVERAGE_FILE_NAME), JSON.stringify({"covered":0, "branches":condCount / IID_INC_STEP * 2, "coverage":[]}), "utf8");
     }
@@ -320,7 +334,7 @@
 
     function printLineInfoAux(i, ast) {
         if (ast && ast.loc) {
-            iidSourceInfo[i] = [curFileName, ast.loc.start.line, ast.loc.start.column + 1];
+            iidSourceInfo[i] = [curFileName, ast.loc.start.line, ast.loc.start.column + 1, ast.loc.end.line, ast.loc.end.column + 1];
             //writeLineToIIDMap('iids[' + i + '] = [filename,' + (ast.loc.start.line) + "," + (ast.loc.start.column + 1) + "];\n");
         }
 //        else {
@@ -368,9 +382,13 @@
                 return node;
             }
         };
+//        StatCollector.resumeTimer("internalParse");
         var ast = acorn.parse(code);
+//        StatCollector.suspendTimer("internalParse");
+//        StatCollector.resumeTimer("replace");
         var newAst = astUtil.transformAst(ast, visitorReplaceInExpr, undefined, undefined, true);
         //console.log(newAst);
+//        StatCollector.suspendTimer("replace");
         return newAst.body;
     }
 
@@ -395,43 +413,51 @@
     }
 
     function wrapPutField(node, base, offset, rvalue) {
-        printIidToLoc(node);
-        var ret = replaceInExpr(
-            logPutFieldFunName +
-                "(" + RP + "1, " + RP + "2, " + RP + "3, " + RP + "4)",
-            getIid(),
-            base,
-            offset,
-            rvalue
-        );
-        transferLoc(ret, node);
-        return ret;
+        if (!Config.INSTR_PUTFIELD || Config.INSTR_PUTFIELD(node.computed ? null : offset.value, node)) {
+            printIidToLoc(node);
+            var ret = replaceInExpr(
+                    logPutFieldFunName +
+                    "(" + RP + "1, " + RP + "2, " + RP + "3, " + RP + "4)",
+                getIid(),
+                base,
+                offset,
+                rvalue
+            );
+            transferLoc(ret, node);
+            return ret;
+        } else {
+            return node;
+        }
     }
 
     function wrapModAssign(node, base, offset, op, rvalue) {
-        printIidToLoc(node);
-        var ret = replaceInExpr(
-            logAssignFunName + "(" + RP + "1," + RP + "2," + RP + "3," + RP + "4)(" + RP + "5)",
-            getIid(),
-            base,
-            offset,
-            createLiteralAst(op),
-            rvalue
-        );
-        transferLoc(ret, node);
-        return ret;
+        if (!Config.INSTR_PROPERTY_BINARY_ASSIGNMENT || Config.INSTR_PROPERTY_BINARY_ASSIGNMENT(op, node.computed ? null : offset.value, node)) {
+            printIidToLoc(node);
+            var ret = replaceInExpr(
+                    logAssignFunName + "(" + RP + "1," + RP + "2," + RP + "3," + RP + "4)(" + RP + "5)",
+                getIid(),
+                base,
+                offset,
+                createLiteralAst(op),
+                rvalue
+            );
+            transferLoc(ret, node);
+            return ret;
+        } else {
+            return node;
+        }
     }
 
     function wrapMethodCall(node, base, offset, isCtor) {
         printIidToLoc(node);
-        printSpecialIidToLoc(node);
+        printSpecialIidToLoc(node.callee);
         var ret = replaceInExpr(
             logMethodCallFunName + "(" + RP + "1, " + RP + "2, " + RP + "3, " + (isCtor ? "true" : "false") + ")",
             getIid(),
             base,
             offset
         );
-        transferLoc(ret, node);
+        transferLoc(ret, node.callee);
         return ret;
     }
 
@@ -442,32 +468,40 @@
             getIid(),
             ast
         );
-        transferLoc(ret, node);
+        transferLoc(ret, node.callee);
         return ret;
     }
 
     function wrapGetField(node, base, offset) {
-        printIidToLoc(node);
-        var ret = replaceInExpr(
-            logGetFieldFunName + "(" + RP + "1, " + RP + "2, " + RP + "3)",
-            getIid(),
-            base,
-            offset
-        );
-        transferLoc(ret, node);
-        return ret;
+        if (!Config.INSTR_GETFIELD || Config.INSTR_GETFIELD(node.computed ? null : offset.value, node)) {
+            printIidToLoc(node);
+            var ret = replaceInExpr(
+                    logGetFieldFunName + "(" + RP + "1, " + RP + "2, " + RP + "3)",
+                getIid(),
+                base,
+                offset
+            );
+            transferLoc(ret, node);
+            return ret;
+        } else {
+            return node;
+        }
     }
 
     function wrapRead(node, name, val, isReUseIid, isGlobal, isPseudoGlobal) {
-        printIidToLoc(node);
-        var ret = replaceInExpr(
-            logReadFunName + "(" + RP + "1, " + RP + "2, " + RP + "3," + (isGlobal ? "true" : "false") + "," + (isPseudoGlobal ? "true" : "false") + ")",
-            isReUseIid ? getPrevIidNoInc() : getIid(),
-            name,
-            val
-        );
-        transferLoc(ret, node);
-        return ret;
+        if (!Config.INSTR_READ || Config.INSTR_READ(name, node)) {
+            printIidToLoc(node);
+            var ret = replaceInExpr(
+                    logReadFunName + "(" + RP + "1, " + RP + "2, " + RP + "3," + (isGlobal ? "true" : "false") + "," + (isPseudoGlobal ? "true" : "false") + ")",
+                isReUseIid ? getPrevIidNoInc() : getIid(),
+                name,
+                val
+            );
+            transferLoc(ret, node);
+            return ret;
+        } else {
+            return val;
+        }
     }
 
 //    function wrapReadWithUndefinedCheck(node, name) {
@@ -504,34 +538,42 @@
     }
 
     function wrapWrite(node, name, val, lhs, isGlobal, isPseudoGlobal) {
-        printIidToLoc(node);
-        var ret = replaceInExpr(
-            logWriteFunName + "(" + RP + "1, " + RP + "2, " + RP + "3, " + RP + "4," + (isGlobal ? "true" : "false") + "," + (isPseudoGlobal ? "true" : "false") + ")",
-            getIid(),
-            name,
-            val,
-            lhs
-        );
-        transferLoc(ret, node);
-        return ret;
+        if (!Config.INSTR_WRITE || Config.INSTR_WRITE(name, node)) {
+            printIidToLoc(node);
+            var ret = replaceInExpr(
+                    logWriteFunName + "(" + RP + "1, " + RP + "2, " + RP + "3, " + RP + "4," + (isGlobal ? "true" : "false") + "," + (isPseudoGlobal ? "true" : "false") + ")",
+                getIid(),
+                name,
+                val,
+                lhs
+            );
+            transferLoc(ret, node);
+            return ret;
+        } else {
+            return node;
+        }
     }
 
     function wrapWriteWithUndefinedCheck(node, name, val, lhs) {
-        printIidToLoc(node);
+        if (!Config.INSTR_WRITE || Config.INSTR_WRITE(name, node)) {
+            printIidToLoc(node);
 //        var ret2 = replaceInExpr(
 //            "("+logIFunName+"(typeof ("+name+") === 'undefined'? "+RP+"2 : "+RP+"3))",
 //            createIdentifierAst(name),
 //            wrapRead(node, createLiteralAst(name),createIdentifierAst("undefined")),
 //            wrapRead(node, createLiteralAst(name),createIdentifierAst(name), true)
 //        );
-        var ret = replaceInExpr(
-            logWriteFunName + "(" + RP + "1, " + RP + "2, " + RP + "3, " + logIFunName + "(typeof(" + lhs.name + ")==='undefined'?undefined:" + lhs.name + "), true, true)",
-            getIid(),
-            name,
-            val
-        );
-        transferLoc(ret, node);
-        return ret;
+            var ret = replaceInExpr(
+                    logWriteFunName + "(" + RP + "1, " + RP + "2, " + RP + "3, " + logIFunName + "(typeof(" + lhs.name + ")==='undefined'?undefined:" + lhs.name + "), true, true)",
+                getIid(),
+                name,
+                val
+            );
+            transferLoc(ret, node);
+            return ret;
+        } else {
+            return node;
+        }
     }
 
     function wrapRHSOfModStore(node, left, right, op) {
@@ -566,17 +608,51 @@
         return false;
     }
 
+    var dummyFun = function () {
+    };
+    var dummyObject = {};
+    var dummyArray = [];
+
+    function getLiteralValue(funId, node) {
+        if (node.name === "undefined") {
+            return undefined;
+        } else if (node.name === "NaN") {
+            return NaN;
+        } else if (node.name === "Infinity") {
+            return Infinity;
+        }
+        switch (funId) {
+            case N_LOG_NUMBER_LIT:
+            case N_LOG_STRING_LIT:
+            case N_LOG_NULL_LIT:
+            case N_LOG_REGEXP_LIT:
+            case N_LOG_BOOLEAN_LIT:
+                return node.value;
+            case N_LOG_ARRAY_LIT:
+                return dummyArray;
+            case N_LOG_FUNCTION_LIT:
+                return dummyFun;
+            case N_LOG_OBJECT_LIT:
+                return dummyObject;
+        }
+        throw new Error(funId + " not known");
+    }
+
     function wrapLiteral(node, ast, funId) {
-        printIidToLoc(node);
-        var hasGetterSetter = ifObjectExpressionHasGetterSetter(node);
-        var ret = replaceInExpr(
-            logLitFunName + "(" + RP + "1, " + RP + "2, " + RP + "3," + hasGetterSetter + ")",
-            getIid(),
-            ast,
-            createLiteralAst(funId)
-        );
-        transferLoc(ret, node);
-        return ret;
+        if (!Config.INSTR_LITERAL || Config.INSTR_LITERAL(getLiteralValue(funId, node), node)) {
+            printIidToLoc(node);
+            var hasGetterSetter = ifObjectExpressionHasGetterSetter(node);
+            var ret = replaceInExpr(
+                    logLitFunName + "(" + RP + "1, " + RP + "2, " + RP + "3," + hasGetterSetter + ")",
+                getIid(),
+                ast,
+                createLiteralAst(funId)
+            );
+            transferLoc(ret, node);
+            return ret;
+        } else {
+            return node;
+        }
     }
 
     function wrapReturn(node, expr) {
@@ -617,74 +693,98 @@
     }
 
     function wrapUnaryOp(node, argument, operator) {
-        printOpIidToLoc(node);
-        var ret = replaceInExpr(
-            logUnaryOpFunName + "(" + RP + "1," + RP + "2," + RP + "3)",
-            getOpIid(),
-            createLiteralAst(operator),
-            argument
-        );
-        transferLoc(ret, node);
-        return ret;
+        if (!Config.INSTR_UNARY || Config.INSTR_UNARY(operator, node)) {
+            printOpIidToLoc(node);
+            var ret = replaceInExpr(
+                    logUnaryOpFunName + "(" + RP + "1," + RP + "2," + RP + "3)",
+                getOpIid(),
+                createLiteralAst(operator),
+                argument
+            );
+            transferLoc(ret, node);
+            return ret;
+        } else {
+            return node;
+        }
     }
 
     function wrapBinaryOp(node, left, right, operator) {
-        printOpIidToLoc(node);
-        var ret = replaceInExpr(
-            logBinaryOpFunName + "(" + RP + "1, " + RP + "2, " + RP + "3, " + RP + "4)",
-            getOpIid(),
-            createLiteralAst(operator),
-            left,
-            right
-        );
-        transferLoc(ret, node);
-        return ret;
+        if (!Config.INSTR_BINARY || Config.INSTR_BINARY(operator, operator)) {
+            printOpIidToLoc(node);
+            var ret = replaceInExpr(
+                    logBinaryOpFunName + "(" + RP + "1, " + RP + "2, " + RP + "3, " + RP + "4)",
+                getOpIid(),
+                createLiteralAst(operator),
+                left,
+                right
+            );
+            transferLoc(ret, node);
+            return ret;
+        } else {
+            return node;
+        }
     }
 
     function wrapLogicalAnd(node, left, right) {
-        printCondIidToLoc(node);
-        var ret = replaceInExpr(
-            logConditionalFunName + "(" + RP + "1, " + RP + "2)?" + RP + "3:" + logLastFunName + "()",
-            getCondIid(),
-            left,
-            right
-        );
-        transferLoc(ret, node);
-        return ret;
+        if (!Config.INSTR_CONDITIONAL || Config.INSTR_CONDITIONAL("&&", node)) {
+            printCondIidToLoc(node);
+            var ret = replaceInExpr(
+                    logConditionalFunName + "(" + RP + "1, " + RP + "2)?" + RP + "3:" + logLastFunName + "()",
+                getCondIid(),
+                left,
+                right
+            );
+            transferLoc(ret, node);
+            return ret;
+        } else {
+            return node;
+        }
     }
 
     function wrapLogicalOr(node, left, right) {
-        printCondIidToLoc(node);
-        var ret = replaceInExpr(
-            logConditionalFunName + "(" + RP + "1, " + RP + "2)?" + logLastFunName + "():" + RP + "3",
-            getCondIid(),
-            left,
-            right
-        );
-        transferLoc(ret, node);
-        return ret;
+        if (!Config.INSTR_CONDITIONAL || Config.INSTR_CONDITIONAL("||", node)) {
+            printCondIidToLoc(node);
+            var ret = replaceInExpr(
+                    logConditionalFunName + "(" + RP + "1, " + RP + "2)?" + logLastFunName + "():" + RP + "3",
+                getCondIid(),
+                left,
+                right
+            );
+            transferLoc(ret, node);
+            return ret;
+        } else {
+            return node;
+        }
     }
 
     function wrapSwitchDiscriminant(node, discriminant) {
-        printCondIidToLoc(node);
-        var ret = replaceInExpr(
-            logSwitchLeftFunName + "(" + RP + "1, " + RP + "2)",
-            getCondIid(),
-            discriminant
-        );
-        transferLoc(ret, node);
-        return ret;
+        if (!Config.INSTR_CONDITIONAL || Config.INSTR_CONDITIONAL("switch", node)) {
+            printCondIidToLoc(node);
+            var ret = replaceInExpr(
+                    logSwitchLeftFunName + "(" + RP + "1, " + RP + "2)",
+                getCondIid(),
+                discriminant
+            );
+            transferLoc(ret, node);
+            return ret;
+        } else {
+            return node;
+        }
     }
 
     function wrapSwitchTest(node, test) {
-        printCondIidToLoc(node);
-        var ret = replaceInExpr(
-            logSwitchRightFunName + "(" + RP + "1, " + RP + "2)",
-            getCondIid(),
-            test
-        );
-        transferLoc(ret, node);
-        return ret;
+        if (!Config.INSTR_CONDITIONAL || Config.INSTR_CONDITIONAL("switch", node)) {
+            printCondIidToLoc(node);
+            var ret = replaceInExpr(
+                    logSwitchRightFunName + "(" + RP + "1, " + RP + "2)",
+                getCondIid(),
+                test
+            );
+            transferLoc(ret, node);
+            return ret;
+        } else {
+            return node;
+        }
     }
 
     function wrapConditional(node, test) {
@@ -692,27 +792,32 @@
             return node;
         } // to handle for(;;) ;
 
-        printCondIidToLoc(node);
-        var ret = replaceInExpr(
-            logConditionalFunName + "(" + RP + "1, " + RP + "2)",
-            getCondIid(),
-            test
-        );
-        transferLoc(ret, node);
-        return ret;
+        if (!Config.INSTR_CONDITIONAL || Config.INSTR_CONDITIONAL("other", node)) {
+            printCondIidToLoc(node);
+            var ret = replaceInExpr(
+                    logConditionalFunName + "(" + RP + "1, " + RP + "2)",
+                getCondIid(),
+                test
+            );
+            transferLoc(ret, node);
+            return ret;
+        } else {
+            return node;
+        }
+
     }
 
-    function createCallWriteAsStatement(node, name, val) {
-        printIidToLoc(node);
-        var ret = replaceInStatement(
-            logWriteFunName + "(" + RP + "1, " + RP + "2, " + RP + "3)",
-            getIid(),
-            name,
-            val
-        );
-        transferLoc(ret[0].expression, node);
-        return ret;
-    }
+//    function createCallWriteAsStatement(node, name, val) {
+//        printIidToLoc(node);
+//        var ret = replaceInStatement(
+//            logWriteFunName + "(" + RP + "1, " + RP + "2, " + RP + "3)",
+//            getIid(),
+//            name,
+//            val
+//        );
+//        transferLoc(ret[0].expression, node);
+//        return ret;
+//    }
 
     function createCallInitAsStatement(node, name, val, isArgumentSync, lhs) {
         printIidToLoc(node);
@@ -720,7 +825,7 @@
 
         if (isArgumentSync)
             ret = replaceInStatement(
-                RP + "1 = " + logInitFunName + "(" + RP + "2, " + RP + "3, " + RP + "4, " + isArgumentSync + ")",
+                RP + "1 = " + logInitFunName + "(" + RP + "2, " + RP + "3, " + RP + "4, " + isArgumentSync + ", false)",
                 lhs,
                 getIid(),
                 name,
@@ -728,7 +833,7 @@
             );
         else
             ret = replaceInStatement(
-                logInitFunName + "(" + RP + "1, " + RP + "2, " + RP + "3, " + isArgumentSync + ")",
+                logInitFunName + "(" + RP + "1, " + RP + "2, " + RP + "3, " + isArgumentSync + ", false)",
                 getIid(),
                 name,
                 val
@@ -762,7 +867,7 @@
     function wrapForInBody(node, body, name) {
         printIidToLoc(node);
         var ret = replaceInStatement(
-            "function n() { " + logInitFunName + "(" + RP + "1, '" + name + "'," + name + ",false);\n {" + RP + "2}}", getIid(), [body]);
+            "function n() { " + logInitFunName + "(" + RP + "1, '" + name + "'," + name + ",false, true);\n {" + RP + "2}}", getIid(), [body]);
 
         ret = ret[0].body;
         transferLoc(ret, node);
@@ -887,17 +992,18 @@
         return ast.computed ? ast.property : createLiteralAst(ast.property.name);
     }
 
-    function instrumentCall(ast, isCtor) {
+    function instrumentCall(callAst, isCtor) {
+        var ast = callAst.callee;
         var ret;
         if (ast.type === 'MemberExpression') {
-            ret = wrapMethodCall(ast, ast.object,
+            ret = wrapMethodCall(callAst, ast.object,
                 getPropertyAsAst(ast),
                 isCtor);
             return ret;
         } else if (ast.type === 'Identifier' && ast.name === "eval") {
             return ast;
         } else {
-            ret = wrapFunCall(ast, ast, isCtor);
+            ret = wrapFunCall(callAst, ast, isCtor);
             return ret;
         }
     }
@@ -1059,16 +1165,17 @@
         "NewExpression":function (node) {
             var ret = {
                 type:'CallExpression',
-                callee:instrumentCall(node.callee, true),
+                callee:instrumentCall(node, true),
                 'arguments':node.arguments
             };
             transferLoc(ret, node);
-            var ret1 = wrapLiteral(node, ret, N_LOG_OBJECT_LIT);
-            return ret1;
+            return ret;
+//            var ret1 = wrapLiteral(node, ret, N_LOG_OBJECT_LIT);
+//            return ret1;
         },
         "CallExpression":function (node) {
             var isEval = node.callee.type === 'Identifier' && node.callee.name === "eval";
-            var callee = instrumentCall(node.callee, false);
+            var callee = instrumentCall(node, false);
             node.callee = callee;
             if (isEval) {
                 node.arguments = MAP(node.arguments, wrapEvalArg);
@@ -1188,8 +1295,14 @@
         },
         'UnaryExpression':function (node) {
             var ret;
-            if (node.operator === "delete" || node.operator === "void") {
+            if (node.operator === "void") {
                 return node;
+            } else if (node.operator === "delete") {
+                if (node.argument.object) {
+                    ret = wrapBinaryOp(node, node.argument.object, getPropertyAsAst(node.argument), node.operator);
+                } else {
+                    return node;
+                }
             } else {
                 ret = wrapUnaryOp(node, node.argument, node.operator);
             }
@@ -1223,83 +1336,6 @@
         "DoWhileStatement":funCond,
         "ForStatement":funCond
     };
-
-    var exprDepth = 0;
-    var exprDepthStack = [];
-    var topLevelExprs;
-    var visitorIdentifyTopLevelExprPre = {
-        "CallExpression":function (node) {
-            if (node.callee.type === 'MemberExpression' &&
-                node.callee.object.type === 'Identifier' &&
-                node.callee.object.name === astUtil.JALANGI_VAR) {
-                var funName = node.callee.property.name;
-                if ((exprDepth === 0 &&
-                    (funName === 'A' ||
-                        funName === 'P' ||
-                        funName === 'G' ||
-                        funName === 'R' ||
-                        funName === 'W' ||
-                        funName === 'H' ||
-                        funName === 'T' ||
-                        funName === 'Rt' ||
-                        funName === 'B' ||
-                        funName === 'U' ||
-                        funName === 'C' ||
-                        funName === 'C1' ||
-                        funName === 'C2'
-                        )) ||
-                    (exprDepth === 1 &&
-                        (funName === 'F' ||
-                            funName === 'M'))) {
-                    topLevelExprs.push(node.arguments[0].value);
-                }
-                exprDepth++;
-            } else if (node.callee.type === 'CallExpression' &&
-                node.callee.callee.type === 'MemberExpression' &&
-                node.callee.callee.object.type === 'Identifier' &&
-                node.callee.callee.object.name === astUtil.JALANGI_VAR &&
-                (node.callee.callee.property.name === 'F' ||
-                    node.callee.callee.property.name === 'M')) {
-                exprDepth++;
-            }
-        },
-        "FunctionExpression":function (node, context) {
-            exprDepthStack.push(exprDepth);
-            exprDepth = 0;
-        },
-        "FunctionDeclaration":function (node) {
-            exprDepthStack.push(exprDepth);
-            exprDepth = 0;
-        }
-
-    };
-
-    var visitorIdentifyTopLevelExprPost = {
-        "CallExpression":function (node) {
-            if (node.callee.type === 'MemberExpression' &&
-                node.callee.object.type === 'Identifier' &&
-                node.callee.object.name === astUtil.JALANGI_VAR) {
-                exprDepth--;
-            } else if (node.callee.type === 'CallExpression' &&
-                node.callee.callee.type === 'MemberExpression' &&
-                node.callee.callee.object.type === 'Identifier' &&
-                node.callee.callee.object.name === astUtil.JALANGI_VAR &&
-                (node.callee.callee.property.name === 'F' ||
-                    node.callee.callee.property.name === 'M')) {
-                exprDepth--;
-            }
-            return node;
-        },
-        "FunctionExpression":function (node, context) {
-            exprDepth = exprDepthStack.pop();
-            return node;
-        },
-        "FunctionDeclaration":function (node) {
-            exprDepth = exprDepthStack.pop();
-            return node;
-        }
-    };
-
 
     function addScopes(ast) {
 
@@ -1512,10 +1548,13 @@
     // END of Liang Gong's AST post-processor
 
     function transformString(code, visitorsPost, visitorsPre) {
+//         StatCollector.resumeTimer("parse");
 //        console.time("parse")
 //        var newAst = esprima.parse(code, {loc:true, range:true});
         var newAst = acorn.parse(code, { locations:true });
 //        console.timeEnd("parse")
+//        StatCollector.suspendTimer("parse");
+//        StatCollector.resumeTimer("transform");
 //        console.time("transform")
         addScopes(newAst);
         var len = visitorsPost.length;
@@ -1523,6 +1562,7 @@
             newAst = astUtil.transformAst(newAst, visitorsPost[i], visitorsPre[i], astUtil.CONTEXT.RHS);
         }
 //        console.timeEnd("transform")
+//        StatCollector.suspendTimer("transform");
 //        console.log(JSON.stringify(newAst,null,"  "));
         return newAst;
     }
@@ -1535,71 +1575,49 @@
         return name.replace(/.js$/, FILESUFFIX1 + ".js");
     }
 
-    function getMetadata(newAst) {
-        var serialized = astUtil.serialize(newAst);
-        if (topLevelExprs) {
-            // update serialized AST table to include top-level expr info
-            topLevelExprs.forEach(function (iid) {
-                var entry = serialized[iid];
-                if (!entry) {
-                    entry = {};
-                    serialized[iid] = entry;
-                }
-                entry.topLevelExpr = true;
-            });
-        }
-        return serialized;
-    }
-
     /**
      * Instruments the provided code.
      *
      * @param {string} code The code to instrument
-     * @param {{wrapProgram: boolean, filename: string, instFileName: string, serialize: boolean }} options
+     * @param {{wrapProgram: boolean, isEval: boolean }} options
      *    Options for code generation:
      *      'wrapProgram': Should the instrumented code be wrapped with prefix code to load libraries,
      * code to indicate script entry and exit, etc.? should be false for code being eval'd
-     *      'filename': What is the "original" filename of the instrumented code?
-     *                 optional.  if the IID map file is open, it will be updated during
-     *                 instrumentation with source locations pointing to this filename
-     'instFileName': What should the filename for the instrumented code be?
-     *                 If not provided, and the filename parameter is provided, defaults to
-     *                 filename_jalangi_.js.  We need this filename because it gets written
-     *                 into the trace produced by the instrumented code during record
-     'metadata': Should metadata about IIDs be provided (currently serialized ASTs and top-level expressions)?
-     * @return {{code:string, iidMetadata: object}} an object whose 'code' property is the instrumented code string,
-     * and whose 'serializedAST' property has a JSON representation of the serialized AST, of the serialize
-     * parameter was true
+     *      'isEval': is the code being instrumented for an eval?
+     * @return {{code:string, instAST: object}} an object whose 'code' property is the instrumented code string,
+     * and whose 'instAST' property is the AST for the instrumented code
      *
      */
     function instrumentCode(code, options, iid) {
         var tryCatchAtTop = options.wrapProgram,
             isEval = options.isEval,
-            metadata = options.metadata;
-
+            instCodeCallback = isEval && sandbox.analysis && sandbox.analysis.instrumentCode;
         if (typeof  code === "string") {
-            if (iid && sandbox.analysis && sandbox.analysis.instrumentCode) {
-                code = sandbox.analysis.instrumentCode(iid, code);
+            if (iid && sandbox.analysis && sandbox.analysis.instrumentCodePre) {
+                code = sandbox.analysis.instrumentCodePre(iid, code);
             }
             if (code.indexOf(noInstr) < 0 && !(isEval && sandbox.noInstrEval)) {
-                    // this is a call in eval
+                // this is a call in eval
                 initializeIIDCounters(isEval);
                 wrapProgramNode = tryCatchAtTop;
-                topLevelExprs = [];
-                var newAst = transformString(code, [visitorRRPost, visitorOps, visitorIdentifyTopLevelExprPost], [visitorRRPre, undefined, visitorIdentifyTopLevelExprPre]);
+                var newAst = transformString(code, [visitorRRPost, visitorOps], [visitorRRPre, undefined]);
                 // post-process AST to hoist function declarations (required for Firefox)
                 var hoistedFcts = [];
                 newAst = hoistFunctionDeclaration(newAst, hoistedFcts);
+//                StatCollector.resumeTimer("generate");
+//                console.time("generate")
                 var newCode = escodegen.generate(newAst);
+//                console.timeEnd("generate")
+//                StatCollector.suspendTimer("generate");
+
 
                 var ret = newCode + "\n" + noInstr + "\n";
-                if (metadata) {
-                    return { code:ret, iidMetadata:getMetadata(newAst) };
-                } else {
-                    return {code:ret};
+                if (instCodeCallback) {
+                    sandbox.analysis.instrumentCode(iid || -1, newAst);
                 }
+                return { code: ret, instAST: newAst, iidSourceInfo: iidSourceInfo };
             } else {
-                return {code:code};
+                return {code:code };
             }
         } else {
             return {code:code};
@@ -1621,7 +1639,7 @@
         loadInitialIID(args.dirIIDFile, args.initIID);
 
         var wrapProgram = HOP(args, 'wrapProgram') ? args.wrapProgram : true;
-        var codeAndMData = instrumentCode(code, {wrapProgram:wrapProgram, isEval:false, metadata:args.metadata});
+        var codeAndMData = instrumentCode(code, {wrapProgram:wrapProgram, isEval:false });
 
         storeInitialIID(args.dirIIDFile);
         writeIIDMapFile(args.dirIIDFile, args.initIID, args.inlineIID);
@@ -1634,12 +1652,11 @@
             addHelp:true,
             description:"Command-line utility to perform instrumentation"
         });
-        parser.addArgument(['--metadata'], { help:"Collect metadata", action:'storeTrue'});
         parser.addArgument(['--initIID'], { help:"Initialize IIDs to 0", action:'storeTrue'});
         parser.addArgument(['--noInstrEval'], { help:"Do not instrument strings passed to evals", action:'storeTrue'});
         parser.addArgument(['--inlineIID'], { help:"Inline IIDs in the instrumented file", action:'storeTrue'});
-        parser.addArgument(['--dirIIDFile'], { help: "Directory containing "+SMAP_FILE_NAME+" and "+INITIAL_IID_FILE_NAME, defaultValue: process.cwd() });
-        parser.addArgument(['--out'], { help: "Instrumented file name (with path).  The default is to append _jalangi_ to the original JS file name", defaultValue: undefined });
+        parser.addArgument(['--dirIIDFile'], { help:"Directory containing " + SMAP_FILE_NAME + " and " + INITIAL_IID_FILE_NAME, defaultValue:process.cwd() });
+        parser.addArgument(['--out'], { help:"Instrumented file name (with path).  The default is to append _jalangi_ to the original JS file name", defaultValue:undefined });
         parser.addArgument(['file'], {
             help:"file to instrument",
             nargs:1
@@ -1653,10 +1670,13 @@
 
         var fname = args.file[0];
         args.filename = sanitizePath(require('path').resolve(process.cwd(), fname));
-        args.instFileName = args.out?args.out:makeInstCodeFileName(fname);
+        args.instFileName = args.out ? args.out : makeInstCodeFileName(fname);
 
         var codeAndMData = instrumentAux(getCode(fname), args);
-        saveCode(codeAndMData.code, codeAndMData.iidMetadata, args.inlineIID, args.noInstrEval);
+//        console.time("save")
+        saveCode(codeAndMData.code, args.inlineIID, args.noInstrEval);
+//        StatCollector.printStats();
+//        console.timeEnd("save")
     }
 
 

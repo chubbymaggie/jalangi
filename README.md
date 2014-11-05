@@ -59,32 +59,18 @@ A Lubuntu virtual machine with pre-installed Jalangi (very old version) can be d
 
 ### Run Tests
 
+Check if record and replay executions produce same output on some unit tests located under tests/unit/.
+
+    ./node_modules/.bin/mocha --reporter spec node_test/unitTests.js
+
+The above runs Jalangi both with no analysis and with a trivial analysis that wraps all values.  To run the same
+tests over the sunspider benchmarks, use the following command:
+
+    ./node_modules/.bin/mocha --reporter spec node_test/sunspiderTests.js
+
 Run concolic testing tests.
 
     python ./scripts/sym.py
-
-Run no analysis and check if record and replay executions produce same output on some unit tests located under tests/unit/.
-
-    python ./scripts/units.py
-
-Run all value tracking analysis on some unit tests located under tests/unit/.
-
-    python ./scripts/unitsv.py
-
-Run no analysis and check if record and replay executions produce same
-output on the sunspider benchmarks located under
-tests/sunspider1/.
-
-    python scripts/testsp.py
-
-Run all value tracking analysis on the sunspider benchmarks located under
-tests/sunspider1/.
-
-    python scripts/testspv.py
-
-We also have test drivers implemented in JavaScript using [mocha](http://visionmedia.github.io/mocha/), located under `node_test`.  So, to run the basic unit tests, you can do:
-
-    ./node_modules/.bin/mocha --reporter spec node_test/unitTests.js
 
 To run the entire test suite, simply run:
 
@@ -102,6 +88,11 @@ Some automated tests can be run in the browser, using [Selenium](http://docs.sel
 
 You should see Chrome windows opening and closing as the tests are run.
     
+### What's new?
+
+Introducing analysis2.js.  analysis2.js is a new API for performing direct or in browser analysis.  It has a clean,
+efficient, and less error-prone API compared to analysis.js.  You can find more documentation in docs/analysis2.md.
+
 ### Other Scripts
 
 Run likely type inference analysis on the sunspider benchmarks located under tests/sunspider1/.
@@ -282,19 +273,21 @@ Then, open the HTML page in a browser (tested on Chrome) by running
 
     open file:///tmp/annex/index.html
 
-You can now play the game for sometime.  Try two moves and see the console output.  In the
+You can now play the game for sometime.  Try two moves and see the console output after pressing Shift-Alt-T.  In the
 in-browser mode, one must not use ConcolicValue to wrap a program value.  However, one could use shadow execution to collect statistics.
 Shadow memory is supported in the "inbrowser" mode.  Shadow memory library can be accessed in an analysis via J$.Globals.smemory.
  smemory.getShadowObject(obj) returns the shadow object associated with obj if type of obj is "object" or "function".
  smemory.getFrame(varName) returns the frame that contains the variable named "varName".
 
 
-The following shows how to run the object allocation tracker analysis on the annex game:
+The following shows how to run the object allocation tracker analysis on the annex game.  After playing the game for 
+some time, press Shift-Alt-T to print the analysis results on the console.
 
     node src/js/commands/instrument.js --inbrowser --smemory --analysis src/js/analyses/objectalloc/ObjectAllocationTrackerEngineIB.js --outputDir /tmp tests/tizen/annex
     open file:///tmp/annex/index.html
 
-The following shows how to run the likely type inference analysis on the annex game:
+The following shows how to run the likely type inference analysis on the annex game. After playing the game for 
+some time, press Shift-Alt-T to print the analysis results on the console.
 
     node src/js/commands/instrument.js --inbrowser --smemory --analysis analyses/likelytype/LikelyTypeInferEngineIB.js --outputDir /tmp tests/tizen/annex
     open file:///tmp/annex/index.html

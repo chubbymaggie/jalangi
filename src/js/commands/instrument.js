@@ -55,6 +55,11 @@ function instrument(options, cb) {
     // parse out options
     //
 
+    if (options.serialize) {
+        throw new Error("serialize is no longer a valid option");
+    }
+    var verbose = options.verbose;
+
     var instrumentInline = options.instrumentInline;
 
     var excludePattern = options.exclude;
@@ -65,7 +70,10 @@ function instrument(options, cb) {
         onlyIncludeList = options.only_include.split(path.delimiter);
     }
 
-    var dumpSerializedASTs = options.serialize;
+    // a callback function to be invoked for every instrumented script
+    // it gets passed the instrumented code and the corresponding AST,
+    // and can return new instrumented code
+    var instCallback = options.instCallback;
 
     var jalangiRoot = getJalangiRoot();
 
@@ -78,6 +86,10 @@ function instrument(options, cb) {
 
     var inbrowser = options.inbrowser;
 
+    var analysis2 = options.analysis2;
+
+    instUtil.setHeaders(analysis2);
+
     var smemory = options.smemory;
 
     var copyRuntime = options.copy_runtime;
@@ -88,9 +100,11 @@ function instrument(options, cb) {
     // directory to which app is being copied
     var copyDir;
 
-    // analysis to run in browser (?)
-    var analysis = options.analysis;
+    // analyses to run in browser
+    var analyses = options.analysis;
 
+    // initialization parameters for analysis
+    var initParams = options.initParam;
     /**
      * extra scripts to inject into the application and instrument
      * @type {Array.<String>}
@@ -112,9 +126,8 @@ function instrument(options, cb) {
             wrapProgram:true,
             filename:origname,
             instFileName:instname,
-            metadata:dumpSerializedASTs,
-            dirIIDFile: copyDir,
-            initIID: firstEntry
+            dirIIDFile:copyDir,
+            initIID:firstEntry
         };
         if (firstEntry) {
             firstEntry = false;
@@ -125,9 +138,6 @@ function instrument(options, cb) {
         // TODO make this async?
         fs.writeFileSync(path.join(copyDir, origname), src);
         fs.writeFileSync(path.join(copyDir, instname), instrumentedCode);
-        if (dumpSerializedASTs) {
-            fs.writeFileSync(path.join(copyDir, instname + ".ast.json"), JSON.stringify(instResult.serializedAST, undefined, 2), "utf8");
-        }
         return instrumentedCode;
     }
 
@@ -165,14 +175,36 @@ function instrument(options, cb) {
         function getContainedRuntimeScriptTags() {
             var result = "";
             var addScript = function (file) {
-                var fileName = path.join(jalangiRuntimeDir, path.basename(file));
+                var fileName = "/" + jalangiRuntimeDir + "/" + path.basename(file);
                 result += "<script src=\"" + fileName + "\"></script>";
             };
             instUtil.headerSources.forEach(addScript);
-            if (analysis) {
-                analysis.forEach(addScript);
+            result += "<script src=\"jalangi_sourcemap.js\"></script>";
+            if (analyses) {
+                if (analysis2) {
+                    result += genInitParamsCode();
+                }
+                analyses.forEach(addScript);
             }
             return result;
+        }
+
+        function genInitParamsCode() {
+            var initParamsObj = {};
+            if (initParams) {
+                initParams.forEach(function (keyVal) {
+                    var split = keyVal.split(':');
+                    if (split.length !== 2) {
+                        throw new Error("invalid initParam " + keyVal);
+                    }
+                    initParamsObj[split[0]] = split[1];
+                });
+            }
+            if (analysis2) {
+                return "<script>J$.initParams = " + JSON.stringify(initParamsObj) + ";</script>";
+            } else {
+                return "<script>if (J$.analysis.init) { J$.analysis.init(" + JSON.stringify(initParamsObj) + "); }</script>";
+            }
         }
 
         if (instrumentInline) {
@@ -189,14 +221,18 @@ function instrument(options, cb) {
                     headerLibs = getContainedRuntimeScriptTags();
                 } else {
                     var tmp3 = "";
-                    if (analysis) {
-                        analysis.forEach(function (src) {
+                    if (analyses) {
+                        analyses.forEach(function (src) {
                             src = path.resolve(src);
                             tmp3 += "<script src=\"" + src + "\"></script>";
                         });
                     }
 
                     headerLibs = instUtil.getHeaderCodeAsScriptTags(jalangiRoot);
+                    headerLibs += "<script src=\"jalangi_sourcemap.js\"></script>";
+                    if (analysis2) {
+                        headerLibs = headerLibs + genInitParamsCode();
+                    }
                     headerLibs = headerLibs + tmp3;
                 }
                 if (selenium) {
@@ -211,8 +247,11 @@ function instrument(options, cb) {
                 if (smemory) {
                     headerLibs = "<script>" + smemoryOption + "</script>" + headerLibs;
                 }
-                headerLibs += "<script src=\"jalangi_sourcemap.js\"></script>";
 
+                if (analyses && !analysis2) {
+                    // add initialization code at the end
+                    headerLibs += genInitParamsCode();
+                }
                 if (extraAppScripts.length > 0) {
                     // we need to inject script tags for the extra app scripts,
                     // which have been copied into the app directory
@@ -245,15 +284,32 @@ function instrument(options, cb) {
 
     var firstEntry = true;
 
+
+    function writeMetadataToFile(metadata, path) {
+        var fd = fs.openSync(path, 'w');
+        fs.writeSync(fd, "{\n");
+        Object.keys(metadata).forEach(function (iid, ind, arr) {
+            fs.writeSync(fd, "  \"" + iid + "\": ");
+            fs.writeSync(fd, JSON.stringify(metadata[iid],undefined,2));
+            if (ind < arr.length - 1) {
+                fs.writeSync(fd, ",");
+            }
+            fs.writeSync(fd, "\n");
+        });
+        fs.writeSync(fd, "}\n");
+        fs.closeSync(fd);
+    }
+
     InstrumentJSStream.prototype._flush = function (cb) {
-        console.log("instrumenting " + this.origScriptName);
+        if (require.main === module || verbose) {
+            console.log("instrumenting " + this.origScriptName);
+        }
         var options = {
             wrapProgram:true,
             filename:this.origScriptName,
             instFileName:this.instScriptName,
-            metadata:dumpSerializedASTs,
-            dirIIDFile: copyDir,
-            initIID: firstEntry
+            dirIIDFile:copyDir,
+            initIID:firstEntry
         };
         if (firstEntry) {
             firstEntry = false;
@@ -262,6 +318,9 @@ function instrument(options, cb) {
         var instResult;
         try {
             instResult = esnstrument.instrumentCodeDeprecated(this.data, options);
+            if (typeof instResult !== 'string' && instCallback) {
+                instResult.code = instCallback(instResult);
+            }
         } catch (e) {
             if (e instanceof SyntaxError) {
                 // just output the same file
@@ -271,10 +330,6 @@ function instrument(options, cb) {
             }
         }
         if (instResult) {
-            if (dumpSerializedASTs) {
-                var metadata = instResult.iidMetadata;
-                fs.writeFileSync(path.join(copyDir, this.instScriptName + ".ast.json"), JSON.stringify(metadata, undefined, 2), "utf8");
-            }
             if (typeof instResult === 'string') {
                 // this can occur if it's a script we're not supposed to instrument
                 this.push(instResult);
@@ -300,7 +355,7 @@ function instrument(options, cb) {
      * @returns {boolean}
      */
     function includedFile(fileName) {
-        var relativePath = fileName.substring(appDir.length+1);
+        var relativePath = fileName.substring(appDir.length + 1);
         var result = false;
         for (var i = 0; i < onlyIncludeList.length; i++) {
             var prefix = onlyIncludeList[i];
@@ -355,8 +410,8 @@ function instrument(options, cb) {
             fs.writeFileSync(outputFile, String(fs.readFileSync(srcFile)));
         };
         instUtil.headerSources.forEach(copyFile);
-        if (analysis) {
-            analysis.forEach(function (f) {
+        if (analyses) {
+            analyses.forEach(function (f) {
                 var outputFile = path.join(outputDir, path.basename(f));
                 fs.writeFileSync(outputFile, String(fs.readFileSync(f)));
             });
@@ -434,12 +489,13 @@ function instrument(options, cb) {
 
 if (require.main === module) { // main script
     var parser = new ArgumentParser({ addHelp:true, description:"Utility to apply Jalangi instrumentation to files or a folder."});
-    parser.addArgument(['-s', '--serialize'], { help:"dump serialized ASTs along with code", action:'storeTrue' });
+    parser.addArgument(['--analysis2'], { help:"use analysis2", action:'storeTrue' });
     parser.addArgument(['-x', '--exclude'], { help:"do not instrument any scripts whose file path contains this substring" });
-    parser.addArgument(['--only_include'], { help: "list of path prefixes specifying which sub-directories should be instrumented, separated by path.delimiter"});
+    parser.addArgument(['--only_include'], { help:"list of path prefixes specifying which sub-directories should be instrumented, separated by path.delimiter"});
     // TODO add back this option once we've fixed the relevant HTML parsing code
     parser.addArgument(['-i', '--instrumentInline'], { help:"instrument inline scripts", action:'storeTrue'});
     parser.addArgument(['--analysis'], { help:"Analysis script for 'inbrowser'/'record' mode.  Analysis must not use ConcolicValue", action:"append" });
+    parser.addArgument(['--initParam'], { help:"initialization parameter for analysis, specified as key:value", action:'append'});
     parser.addArgument(['-d', '--direct_in_output'], { help:"Store instrumented app directly in output directory (by default, creates a sub-directory of output directory)", action:'storeTrue' });
     parser.addArgument(['--selenium'], { help:"Insert code so scripts can detect they are running under Selenium.  Also keeps Jalangi trace in memory", action:'storeTrue' });
     parser.addArgument(['--in_memory_trace'], { help:"Insert code to tell analysis to keep Jalangi trace in memory instead of writing to WebSocket", action:'storeTrue' });
@@ -449,6 +505,7 @@ if (require.main === module) { // main script
     parser.addArgument(['--extra_app_scripts'], { help:"list of extra application scripts to be injected and instrumented, separated by path.delimiter"});
     parser.addArgument(['--no_html'], { help:"don't inject Jalangi runtime into HTML files", action:'storeTrue'});
     parser.addArgument(['--outputDir'], { help:"directory in which to place instrumented files", required:true });
+    parser.addArgument(['--verbose'], { help: "print verbose output", action:'storeTrue'});
     parser.addArgument(['inputFiles'], { help:"either a list of JavaScript files to instrument, or a single directory under which all JavaScript and HTML files should be instrumented (modulo the --no_html and --exclude flags)", nargs:'+'});
 
     var args = parser.parseArgs();
